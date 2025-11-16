@@ -52,9 +52,8 @@ This custom integration enables control of the Eufy RoboVac S1 Pro through Home 
 
 You'll need the following information during setup:
 
-- **Device ID**: Available in the Eufy app
-- **Local Key**: Device's local communication key
-- **IP Address**: Robot vacuum's local IP address
+- **username**: User ID of eufylife.com (Confirmed from eufy Clean app)
+- **password**: Password for above User ID
 
 ## Supported Entities
 
