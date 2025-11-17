@@ -62,13 +62,15 @@ You'll need the following information during setup:
 
 ### Sensors
 - Battery level
-- Cleaning mode
-- Fan Speed
 - Running status
+- Cleaning statistics (Total Cleaning Area, Total Cleaning Count)
 
 ### Select
 - Cleaning mode and water level selection
 - Suction power level
+
+### Switch
+- Auto-return toggle
 
 ## Troubleshooting
 

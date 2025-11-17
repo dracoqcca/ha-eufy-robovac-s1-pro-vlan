@@ -6,7 +6,7 @@ import asyncio
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -68,7 +68,8 @@ class CleaningModeSelect(CoordinatorEntity, SelectEntity):
     """Select entity for cleaning mode."""
 
     _attr_name = "Cleaning Mode"
-    _attr_icon = "mdi:vacuum"
+    _attr_icon = "mdi:broom"
+    _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator):
         """Initialize the select entity."""

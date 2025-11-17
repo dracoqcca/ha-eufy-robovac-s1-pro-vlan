@@ -47,6 +47,14 @@ S1_PRO_COMMANDS = {
     "return": "AggG",       # ステーション帰還
 }
 
+# S1 Pro Status definitions for DPS 153 (from actual device analysis)
+S1_PRO_STATUS = {
+    "CLEANING": "BgoAEAUyAA==",     # 掃除中
+    "PAUSED": "CAoAEAUyAggB",      # 一時停止
+    "RETURNING": "BBAHQgA=",        # 帰還中
+    # DOCKED states vary based on charging status, water refill, etc.
+}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -111,50 +119,72 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         dps6 = self.coordinator.data.get("6", 0)      # Status indicator 1
         dps7 = self.coordinator.data.get("7", 0)      # Status indicator 2
         dps152 = self.coordinator.data.get("152", "")  # Command status
+        dps153 = self.coordinator.data.get("153", "")  # Actual status indicator (most reliable)
         
-        logger.debug(f"Activity check - DPS 2: {dps2}, DPS 5: {dps5}, DPS 6: {dps6}, DPS 7: {dps7}, DPS 152: {dps152}")
+        logger.debug(f"Activity check - DPS 2: {dps2}, DPS 5: {dps5}, DPS 6: {dps6}, DPS 7: {dps7}, DPS 152: {dps152}, DPS 153: {dps153}")
         
         # Error detection
         if isinstance(dps6, int) and dps6 >= 100:
             return VacuumActivity.ERROR
         
-        # Check DPS 152 status first (most reliable)
-        if dps152 == S1_PRO_COMMANDS["cleaning"] or dps152 == "AggO":
+        # Check DPS 153 status first (most reliable)
+        if dps153 == S1_PRO_STATUS["CLEANING"]:
             self._was_paused = False  # クリア
             return VacuumActivity.CLEANING
-        elif dps152 == S1_PRO_COMMANDS["pause"] or dps152 == "AggN":
+        elif dps153 == S1_PRO_STATUS["PAUSED"]:
             self._was_paused = True  # 一時停止状態を記憶
             return VacuumActivity.PAUSED
-        elif dps152 == S1_PRO_COMMANDS["return"] or dps152 == "AggG":
+        elif dps153 == S1_PRO_STATUS["RETURNING"]:
             self._was_paused = False  # クリア
             return VacuumActivity.RETURNING
         
-        # Fallback to DPS 6/7 combination
-        if dps6 == 2 and dps7 == 3:
-            self._was_paused = False
-            return VacuumActivity.CLEANING
-        elif dps6 == 3 and dps7 == 4:
-            self._was_paused = True
-            return VacuumActivity.PAUSED
-        elif dps6 == 1 and dps7 == 2:
-            self._was_paused = False
-            return VacuumActivity.RETURNING
-        elif dps6 == 0 and dps7 == 0:
-            battery = self.coordinator.data.get("8", 0)
-            if battery >= 95:
-                return VacuumActivity.DOCKED
-            else:
-                return VacuumActivity.IDLE
-        else:
-            # Default state based on power and battery
-            if dps2:
-                return VacuumActivity.IDLE
-            else:
+        # If DPS 153 doesn't match known states, it's docked or charging
+        # (DPS 153 varies for different docked states like charging, fully charged, water refill, etc.)
+        if dps153 and dps153 not in S1_PRO_STATUS.values():
+            self._was_paused = False  # クリア
+            return VacuumActivity.DOCKED
+        
+        # Fallback to DPS 152 status if DPS 153 is not available
+        if not dps153:
+            if dps152 == S1_PRO_COMMANDS["cleaning"] or dps152 == "AggO":
+                self._was_paused = False  # クリア
+                return VacuumActivity.CLEANING
+            elif dps152 == S1_PRO_COMMANDS["pause"] or dps152 == "AggN":
+                self._was_paused = True  # 一時停止状態を記憶
+                return VacuumActivity.PAUSED
+            elif dps152 == S1_PRO_COMMANDS["return"] or dps152 == "AggG":
+                self._was_paused = False  # クリア
+                return VacuumActivity.RETURNING
+            
+            # Fallback to DPS 6/7 combination
+            if dps6 == 2 and dps7 == 3:
+                self._was_paused = False
+                return VacuumActivity.CLEANING
+            elif dps6 == 3 and dps7 == 4:
+                self._was_paused = True
+                return VacuumActivity.PAUSED
+            elif dps6 == 1 and dps7 == 2:
+                self._was_paused = False
+                return VacuumActivity.RETURNING
+            elif dps6 == 0 and dps7 == 0:
                 battery = self.coordinator.data.get("8", 0)
                 if battery >= 95:
                     return VacuumActivity.DOCKED
                 else:
                     return VacuumActivity.IDLE
+            else:
+                # Default state based on power and battery
+                if dps2:
+                    return VacuumActivity.IDLE
+                else:
+                    battery = self.coordinator.data.get("8", 0)
+                    if battery >= 95:
+                        return VacuumActivity.DOCKED
+                    else:
+                        return VacuumActivity.IDLE
+        
+        # If we get here without a determined state, return IDLE
+        return VacuumActivity.IDLE
 
     @property
     def battery_level(self) -> int | None:
@@ -187,33 +217,32 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         attrs = super().state_attributes or {}
         
         if self.coordinator.data:
-            attrs["error_code"] = self.error_code
-            attrs["dps_2"] = self.coordinator.data.get("2")
-            attrs["dps_5"] = self.coordinator.data.get("5")
-            attrs["dps_6"] = self.coordinator.data.get("6")
-            attrs["dps_7"] = self.coordinator.data.get("7")
-            attrs["dps_10"] = self.coordinator.data.get("10")
-            attrs["dps_152"] = self.coordinator.data.get("152")
-            attrs["dps_154"] = self.coordinator.data.get("154")
-            attrs["was_paused"] = self._was_paused
-            attrs["is_running"] = self._is_running()
-            attrs["raw_dps"] = dict(self.coordinator.data)  # Debug info
+            # Only include essential attributes for end users
+            if error_code := self.error_code:
+                attrs["error_code"] = error_code
             
         return attrs
     
     def _is_running(self) -> bool:
         """Check if vacuum is actually running based on multiple indicators."""
         if self.coordinator.data:
+            dps153 = self.coordinator.data.get("153", "")
             dps152 = self.coordinator.data.get("152", "")
             dps6 = self.coordinator.data.get("6", 0)
             dps7 = self.coordinator.data.get("7", 0)
             
-            # Check DPS 152 first
-            if dps152 == S1_PRO_COMMANDS["cleaning"] or dps152 == "AggO":
+            # Check DPS 153 first (most reliable)
+            if dps153 == S1_PRO_STATUS["CLEANING"]:
                 return True
             
-            # Fallback to DPS 6/7
-            return (dps6 == 2 and dps7 == 3)
+            # Fallback to DPS 152 if DPS 153 is not available
+            if not dps153 and (dps152 == S1_PRO_COMMANDS["cleaning"] or dps152 == "AggO"):
+                return True
+            
+            # Final fallback to DPS 6/7
+            if not dps153 and not dps152:
+                return (dps6 == 2 and dps7 == 3)
+                
         return False
 
     @property
@@ -318,9 +347,13 @@ class RobovacVacuum(CoordinatorEntity, StateVacuumEntity):
         # Check current state
         activity = self.activity
         current_dps152 = self.coordinator.data.get("152", "")
+        current_dps153 = self.coordinator.data.get("153", "")
         
         # 一時停止状態からの再開か確認
-        if activity == VacuumActivity.PAUSED or self._was_paused or current_dps152 == S1_PRO_COMMANDS["pause"]:
+        if (activity == VacuumActivity.PAUSED or 
+            self._was_paused or 
+            current_dps153 == S1_PRO_STATUS["PAUSED"] or
+            current_dps152 == S1_PRO_COMMANDS["pause"]):
             # 一時停止からの再開 - cleaningコマンドのみ送信
             logger.info("Resuming from pause - sending cleaning command only")
             

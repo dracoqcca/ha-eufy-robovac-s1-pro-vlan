@@ -22,7 +22,7 @@ async def async_setup_entry(
         coordinator = props[CONF_COORDINATOR]
         
         # Only add auto-return switch if the DPS is available
-        if coordinator.data and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_135 in coordinator.data:
+        if coordinator.data and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156 in coordinator.data:
             devices.append(AutoReturnCleaningSwitch(coordinator=coordinator))
 
     if devices:
@@ -38,12 +38,12 @@ class AutoReturnCleaningSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEn
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_135 in self.coordinator.data
+        return self.coordinator.data is not None and RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156 in self.coordinator.data
 
     @property
     def is_on(self) -> bool | None:
         if self.coordinator.data:
-            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_135)
+            value = self.coordinator.data.get(RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156)
             
             if isinstance(value, bool):
                 return value
@@ -56,7 +56,7 @@ class AutoReturnCleaningSwitch(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEn
         return None
 
     async def async_turn_on(self, **kwargs) -> None:
-        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_135: True})
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156: True})
 
     async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_135: False})
+        await self.coordinator.tuya_client.async_set({RobovacDPs.ROBOVAC_AUTO_RETURN_CLEAN_DPS_ID_156: False})

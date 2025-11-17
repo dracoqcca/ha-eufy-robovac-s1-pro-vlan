@@ -1,15 +1,120 @@
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.icon import icon_for_battery_level
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+import base64
+import logging
 
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
 from .coordinators import EufyTuyaDataUpdateCoordinator
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def decode_varint(data: bytes, start_pos: int) -> tuple[int, int]:
+    """Decode Protocol Buffer varint format.
+    
+    Returns:
+        tuple: (decoded_value, next_position)
+    """
+    value = 0
+    shift = 0
+    pos = start_pos
+    
+    while pos < len(data):
+        byte = data[pos]
+        value |= (byte & 0x7F) << shift
+        pos += 1
+        if not (byte & 0x80):  # MSB is 0, so this is the last byte
+            break
+        shift += 7
+    
+    return value, pos
+
+
+def parse_dps167_statistics(dps167_value: str) -> dict[str, int | None]:
+    """Parse statistics from DPS 167.
+    
+    Based on detailed analysis of S1 Pro data:
+    - Total count: Last field (varint, can be 1 or 2 bytes)
+    - Total area: 2-byte varint at fixed position 14-15
+    - Total time: Not yet identified in DPS 167
+    
+    Args:
+        dps167_value: Base64-encoded DPS 167 value
+        
+    Returns:
+        dict with keys: total_count, total_area, total_time_mins
+    """
+    stats = {
+        "total_count": None,
+        "total_area": None,
+        "total_time_mins": None,
+    }
+    
+    try:
+        # Decode base64
+        data = base64.b64decode(dps167_value)
+        
+        if len(data) == 0:
+            return stats
+        
+        # 1. Total count is in the last field as varint
+        # The last field has tag 0x18 (field #3, wire_type=0)
+        # It can be 1 byte (0-127) or 2+ bytes (128+)
+        
+        # Find the last field by looking for tag 0x18 from the end
+        if len(data) >= 2 and data[-2] == 0x18:
+            # Tag found, next byte is the value (1-byte varint)
+            stats["total_count"] = data[-1]
+        elif len(data) >= 3 and data[-3] == 0x18:
+            # Tag found, next 2 bytes are the value (2-byte varint)
+            byte1 = data[-2]
+            byte2 = data[-1]
+            if byte1 & 0x80:  # MSB set = multi-byte varint
+                stats["total_count"] = (byte1 & 0x7F) + (byte2 << 7)
+            else:
+                # Single byte value
+                stats["total_count"] = byte1
+        elif len(data) >= 4 and data[-4] == 0x18:
+            # Tag found, next 3 bytes are the value (3-byte varint, for 16384+)
+            byte1 = data[-3]
+            byte2 = data[-2]
+            byte3 = data[-1]
+            if (byte1 & 0x80) and (byte2 & 0x80):
+                stats["total_count"] = (byte1 & 0x7F) + ((byte2 & 0x7F) << 7) + (byte3 << 14)
+            elif byte1 & 0x80:
+                # 2-byte varint
+                stats["total_count"] = (byte1 & 0x7F) + (byte2 << 7)
+            else:
+                # Single byte
+                stats["total_count"] = byte1
+        
+        # 2. Total area is at fixed position 14-15 as 2-byte varint
+        # Confirmed positions for data length 18-19 bytes
+        if len(data) >= 16:
+            byte1 = data[14]
+            byte2 = data[15]
+            
+            # Decode 2-byte varint
+            if byte1 & 0x80:  # MSB set = multi-byte varint
+                area = (byte1 & 0x7F) + (byte2 << 7)
+                stats["total_area"] = area
+            else:
+                # Single byte value (unlikely for area, but handle it)
+                stats["total_area"] = byte1
+        
+        # 3. Total time: not yet reliably identified
+                
+    except Exception as e:
+        _LOGGER.debug(f"Error parsing DPS 167: {e}")
+    
+    return stats
 
 
 async def async_setup_entry(
@@ -27,28 +132,18 @@ async def async_setup_entry(
         # Always add battery sensor (S1 Pro uses DPS 8)
         devices.append(BatteryPercentageSensor(coordinator=coordinator))
         
-        # Add cleaning mode sensor - now uses DPS 154 and 10 instead of DPS 5
-        devices.append(CleaningModeSensor(coordinator=coordinator))
-        
-        # Add fan speed sensor (DPS 9)
-        devices.append(
-            FanSpeedSensor(
-                name="Fan Speed",
-                icon="mdi:fan",
-                dps_id="9",
-                coordinator=coordinator,
-            )
-        )
-        
-        # Add running status sensor (DPS 2)
+        # Add running status sensor (DPS 153 with DPS 2 fallback)
         devices.append(
             RunningStatusSensor(
-                name="Running Status",
-                icon="mdi:play-pause",
-                dps_id="2",
                 coordinator=coordinator,
             )
         )
+        
+        # Add statistics sensors (from DPS 167)
+        devices.append(TotalCleaningCountSensor(coordinator=coordinator))
+        devices.append(TotalCleaningAreaSensor(coordinator=coordinator))
+        # TODO: Uncomment when time data position is identified
+        # devices.append(TotalCleaningTimeSensor(coordinator=coordinator))
 
     if devices:
         return async_add_devices(devices)
@@ -133,102 +228,144 @@ class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
         return None
 
 
-class CleaningModeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor that shows current cleaning mode based on DPS 154 and 10."""
+
+class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor that shows running status based on DPS 153 (S1 Pro actual state)."""
     
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_name = "Cleaning Mode"
-    _attr_icon = "mdi:broom"
+    _attr_name = "Running Status"
+    _attr_icon = "mdi:play-pause"
     
-    # Cleaning mode definitions matching select.py
-    CLEANING_MODES = {
-        "vacuum": {
-            "name": "Vacuum Only",
-            "dps154": "FAoKCgASABoAIgIIAhIGCAEQASAB",
-            "dps10": None
-        },
-        "mop_low": {
-            "name": "Vacuum and Mop (Water Level: Low)",
-            "dps154": "FAoKCgIIAhIAGgAiABIGCAEQASAB",
-            "dps10": "low"
-        },
-        "mop_middle": {
-            "name": "Vacuum and Mop (Water Level: Medium)",
-            "dps154": "FgoMCgIIAhIAGgAiAggBEgYIARABIAE=",
-            "dps10": "middle"
-        },
-        "mop_high": {
-            "name": "Vacuum and Mop (Water Level: High)",
-            "dps154": "FgoMCgIIAhIAGgAiAggCEgYIARABIAE=",
-            "dps10": "high"
-        }
+    # S1 Pro status definitions (same as vacuum.py)
+    S1_PRO_STATUS = {
+        "CLEANING": "BgoAEAUyAA==",     # 掃除中
+        "PAUSED": "CAoAEAUyAggB",      # 一時停止
+        "RETURNING": "BBAHQgA=",        # 帰還中
     }
     
-    # Map DPS values to mode names
-    DPS_TO_MODE_MAP = {
-        ("FAoKCgASABoAIgIIAhIGCAEQASAB", None): "vacuum",
-        ("FAoKCgIIAhIAGgAiABIGCAEQASAB", "low"): "mop_low",
-        ("FgoMCgIIAhIAGgAiAggBEgYIARABIAE=", "middle"): "mop_middle",
-        ("FgoMCgIIAhIAGgAiAggCEgYIARABIAE=", "high"): "mop_high",
-    }
-
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        # Check if we have the coordinator data and at least DPS 154
-        return self.coordinator.data is not None and "154" in self.coordinator.data
-
+        # Check if we have coordinator data and either DPS 153 (preferred) or DPS 2 (fallback)
+        return self.coordinator.data is not None and ("153" in self.coordinator.data or "2" in self.coordinator.data)
+    
     @property
     def native_value(self) -> str:
-        """Return the current cleaning mode based on DPS 154 and 10."""
+        """Return the running status based on DPS 153."""
         if not self.coordinator.data:
             return "Unknown"
         
-        dps154 = self.coordinator.data.get("154", "")
-        dps10 = self.coordinator.data.get("10", None)
+        # Check DPS 153 first (most reliable for S1 Pro)
+        dps153 = self.coordinator.data.get("153", "")
         
-        # Check if DPS 10 is a string (water level)
-        if isinstance(dps10, str) and dps10 in ["low", "middle", "high"]:
-            water_level = dps10
-        else:
-            water_level = None
-        
-        # Try to find matching mode
-        mode_key = (dps154, water_level)
-        if mode_key in self.DPS_TO_MODE_MAP:
-            mode = self.DPS_TO_MODE_MAP[mode_key]
-            if mode in self.CLEANING_MODES:
-                return self.CLEANING_MODES[mode]["name"]
-        
-        # Try without water level (vacuum mode)
-        if dps154 == self.CLEANING_MODES["vacuum"]["dps154"]:
-            return self.CLEANING_MODES["vacuum"]["name"]
-        
-        # Fallback to DPS 5 if available (legacy)
-        dps5_value = self.coordinator.data.get("5", "")
-        if dps5_value:
-            return str(dps5_value).replace("_", " ").title()
-        
-        return "Unknown"
-
-
-class FanSpeedSensor(BaseDPSensorEntity):
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    
-    def parse_value(self, value):
-        """Convert fan speed to readable format"""
-        if value:
-            return str(value).replace("_", " ").title()
-        return "Unknown"
-
-
-class RunningStatusSensor(BaseDPSensorEntity):
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    
-    def parse_value(self, value):
-        """Convert boolean to readable status"""
-        if value is True:
+        # If vacuum is cleaning, paused, or returning, it's "Running"
+        if dps153 in self.S1_PRO_STATUS.values():
             return "Running"
-        elif value is False:
+        
+        # If DPS 153 has any value other than the known states, it's docked/stopped
+        if dps153:
             return "Stopped"
+        
+        # Fallback to DPS 2 if DPS 153 is not available
+        dps2 = self.coordinator.data.get("2")
+        if dps2 is True:
+            return "Running"
+        elif dps2 is False:
+            return "Stopped"
+        
         return "Unknown"
+
+
+class TotalCleaningCountSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for total number of cleaning sessions from DPS 167."""
+    
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Total Cleaning Count"
+    _attr_icon = "mdi:counter"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.data is not None and "167" in self.coordinator.data
+    
+    @property
+    def native_value(self) -> int | None:
+        """Return the total cleaning count."""
+        if not self.coordinator.data:
+            return None
+        
+        dps167 = self.coordinator.data.get("167", "")
+        if not dps167:
+            return None
+        
+        stats = parse_dps167_statistics(dps167)
+        return stats.get("total_count")
+
+
+class TotalCleaningAreaSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+    """Sensor for total cleaned area from DPS 167."""
+    
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_name = "Total Cleaning Area"
+    _attr_icon = "mdi:texture-box"
+    _attr_native_unit_of_measurement = "m²"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.data is not None and "167" in self.coordinator.data
+    
+    @property
+    def native_value(self) -> int | None:
+        """Return the total cleaning area in square meters."""
+        if not self.coordinator.data:
+            return None
+        
+        dps167 = self.coordinator.data.get("167", "")
+        if not dps167:
+            return None
+        
+        stats = parse_dps167_statistics(dps167)
+        return stats.get("total_area")
+
+
+# TODO: Uncomment when time data position is identified in DPS 167 or DPS 168
+# class TotalCleaningTimeSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
+#     """Sensor for total cleaning time from DPS 167.
+#     
+#     NOTE: The exact position of time data has not been reliably identified yet.
+#     Current investigation shows:
+#     - Not found as simple varint at any fixed position
+#     - May be split into hours/minutes components
+#     - May be stored in seconds (requires 3-byte varint)
+#     - May be in DPS 168 instead of DPS 167
+#     
+#     TODO: Analyze logs with larger time differences to identify the pattern.
+#     """
+#     
+#     _attr_entity_category = EntityCategory.DIAGNOSTIC
+#     _attr_name = "Total Cleaning Time"
+#     _attr_icon = "mdi:clock-outline"
+#     _attr_device_class = SensorDeviceClass.DURATION
+#     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
+#     _attr_state_class = SensorStateClass.TOTAL_INCREASING
+#     
+#     @property
+#     def available(self) -> bool:
+#         """Return if entity is available."""
+#         return self.coordinator.data is not None and "167" in self.coordinator.data
+#     
+#     @property
+#     def native_value(self) -> int | None:
+#         """Return the total cleaning time in minutes."""
+#         if not self.coordinator.data:
+#             return None
+#         
+#         dps167 = self.coordinator.data.get("167", "")
+#         if not dps167:
+#             return None
+#         
+#         stats = parse_dps167_statistics(dps167)
+#         return stats.get("total_time_mins")
