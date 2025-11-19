@@ -12,6 +12,8 @@ import logging
 from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN
 from .coordinators import EufyTuyaDataUpdateCoordinator
 from .mixins import CoordinatorTuyaDeviceUniqueIDMixin
+# vacuum.pyから状態判定関数と説明文をインポート
+from .vacuum import decode_dps153_to_state, SUBSTATUS_DESCRIPTIONS, RobovacState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -230,41 +232,52 @@ class BatteryPercentageSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEnt
 
 
 class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
-    """Sensor that shows running status based on DPS 153 (S1 Pro actual state)."""
+    """Sensor that shows detailed running status based on DPS 153.
+    
+    SUBSTATUS_DESCRIPTIONSで定義されている詳細な状態を表示します：
+    - Cleaning: 掃除中
+    - Paused: 一時停止中
+    - Returning to Dock: ドックに帰還中
+    - Charging: 充電中
+    - Fully Charged: 満充電
+    - Collecting Dust: ごみ収集中
+    - Refilling Water: 給水中
+    - Washing Mop: モップ洗浄中
+    - Drying Mop: モップ乾燥中
+    - など
+    """
     
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_name = "Running Status"
-    _attr_icon = "mdi:play-pause"
-    
-    # S1 Pro status definitions (same as vacuum.py)
-    S1_PRO_STATUS = {
-        "CLEANING": "BgoAEAUyAA==",     # 掃除中
-        "PAUSED": "CAoAEAUyAggB",      # 一時停止
-        "RETURNING": "BBAHQgA=",        # 帰還中
-    }
+    _attr_icon = "mdi:robot-vacuum"
     
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        # Check if we have coordinator data and either DPS 153 (preferred) or DPS 2 (fallback)
         return self.coordinator.data is not None and ("153" in self.coordinator.data or "2" in self.coordinator.data)
     
     @property
     def native_value(self) -> str:
-        """Return the running status based on DPS 153."""
+        """Return the detailed running status based on DPS 153."""
         if not self.coordinator.data:
             return "Unknown"
         
         # Check DPS 153 first (most reliable for S1 Pro)
         dps153 = self.coordinator.data.get("153", "")
         
-        # If vacuum is cleaning, paused, or returning, it's "Running"
-        if dps153 in self.S1_PRO_STATUS.values():
-            return "Running"
-        
-        # If DPS 153 has any value other than the known states, it's docked/stopped
         if dps153:
-            return "Stopped"
+            # 新しいバイトパターン判定ロジックを使用
+            detected_state, substatus = decode_dps153_to_state(dps153)
+            
+            # サブステータスの説明文を取得
+            status_description = SUBSTATUS_DESCRIPTIONS.get(substatus, "Unknown")
+            
+            _LOGGER.debug(
+                f"Running Status: state={detected_state.value}, "
+                f"substatus={substatus}, description={status_description}"
+            )
+            
+            return status_description
         
         # Fallback to DPS 2 if DPS 153 is not available
         dps2 = self.coordinator.data.get("2")
@@ -274,6 +287,43 @@ class RunningStatusSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity,
             return "Stopped"
         
         return "Unknown"
+    
+    @property
+    def icon(self) -> str:
+        """Return icon based on current state."""
+        if not self.coordinator.data:
+            return "mdi:robot-vacuum"
+        
+        dps153 = self.coordinator.data.get("153", "")
+        
+        if dps153:
+            detected_state, substatus = decode_dps153_to_state(dps153)
+            
+            # 状態に応じたアイコンを返す
+            if detected_state == RobovacState.CLEANING:
+                return "mdi:robot-vacuum"
+            elif detected_state == RobovacState.PAUSED:
+                return "mdi:pause-circle"
+            elif detected_state == RobovacState.RETURNING:
+                return "mdi:home-import-outline"
+            elif detected_state == RobovacState.DOCKED:
+                # サブステータスに応じたアイコン
+                if substatus in ["charging", "fully_charged"]:
+                    return "mdi:battery-charging"
+                elif substatus == "dust_collecting":
+                    return "mdi:delete-empty"
+                elif substatus in ["mop_washing", "mop_washing_pre"]:
+                    return "mdi:spray-bottle"
+                elif substatus == "mop_drying":
+                    return "mdi:fan"
+                elif substatus == "water_refilling":
+                    return "mdi:water"
+                else:
+                    return "mdi:home"
+            elif detected_state == RobovacState.ERROR:
+                return "mdi:alert-circle"
+        
+        return "mdi:robot-vacuum"
 
 
 class TotalCleaningCountSensor(CoordinatorTuyaDeviceUniqueIDMixin, CoordinatorEntity, SensorEntity):
