@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, DOMAIN, PLATFORMS
+from .const import CONF_COORDINATOR, CONF_DISCOVERED_DEVICES, CONF_MANUAL_DEVICES, DOMAIN, PLATFORMS
 from .coordinators import EufyTuyaDataUpdateCoordinator
 from .discovery import discover
 from .eufy_local_id_grabber.clients import EufyHomeSession, TuyaAPISession
@@ -34,76 +34,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         user_info = await hass.async_add_executor_job(client.get_user_info)
         logger.debug("Eufy user info: %s", user_info)
-        #
-        # eufy_device_list = await hass.async_add_executor_job(client.get_devices)
+        #        # eufy_device_list = await hass.async_add_executor_job(client.get_devices)
         # logger.debug("Eufy device list: %s", eufy_device_list)
 
         tuya_session = TuyaAPISession(username=f'eh-{user_info["id"]}', country_code=user_info["phone_code"])
-
         homes = await hass.async_add_executor_job(tuya_session.list_homes)
         logger.debug("Tuya homes: %s", homes)
 
-        hass.data[DOMAIN][entry.entry_id].setdefault(CONF_DISCOVERED_DEVICES, {})
-
-        detected_devices = await discover()
-        logger.debug("Detected devices on local network: %s", list(detected_devices.keys()))
-
-        for home in homes:
-            devices_for_home = await hass.async_add_executor_job(tuya_session.list_devices, home["groupId"])
-
-            for device in devices_for_home:
-                logger.debug("Got Tuya device in home group %s: %s", home["groupId"], device)
-
-                device_id = device["devId"]
-                local_key = device["localKey"]
-                
-                logger.debug("Looking for device_id '%s' in detected devices", device_id)
-
-                # Fix KeyError: use pop with default value None
-                discovered_device = detected_devices.pop(device_id, None)
-                if discovered_device:
-                    device_ip = discovered_device["ip"]
-
-                    logger.debug(
-                        "Found matching discovered device at %s for device ID %s",
-                        device_ip,
-                        device_id,
-                    )
-
-                    hass_entity_id = f'{home["groupId"]}-{device["devId"]}'
-
-                    coordinator = EufyTuyaDataUpdateCoordinator(
-                        hass,
-                        logger=logger,
-                        name=DOMAIN,
-                        update_interval=timedelta(seconds=30),
-                        host=device_ip,
-                        device_id=device_id,
-                        local_key=local_key,
-                    )
-
-                    # Try to get initial data, but don't fail if it doesn't work
-                    try:
-                        await coordinator.async_config_entry_first_refresh()
-                    except Exception as e:
-                        logger.warning(
-                            "Could not get initial data for device %s at %s: %s",
-                            device_id,
-                            device_ip,
-                            e,
-                        )
-                        # Still add the device, it might come online later
-
-                    hass.data[DOMAIN][entry.entry_id][CONF_DISCOVERED_DEVICES][hass_entity_id] = {
-                        CONF_COORDINATOR: coordinator
-                    }
-                else:
-                    logger.warning(
-                        "Could not find device %s on the local network. "
-                        "Available devices: %s. Device may be offline or on a different network.",
-                        device_id,
-                        list(detected_devices.keys()) if detected_devices else "none",
-                    )
+        hass.data[DOMAIN][entry.entry_id].setdefault(CONF_DISCOVERED_DEVICES, {})        # Check if manual devices are configured
+        manual_devices = entry.data.get(CONF_MANUAL_DEVICES, {})
+        
+        if manual_devices:
+            logger.debug("Using manual device configurations: %s", list(manual_devices.keys()))
+            # Process manual devices
+            await _setup_manual_devices(hass, entry, tuya_session, homes, manual_devices)
+        else:
+            logger.debug("Using automatic discovery")
+            # Use automatic discovery
+            await _setup_discovered_devices(hass, entry, tuya_session, homes)
 
     except Exception:
         # TODO: raise proper exception
@@ -127,6 +75,121 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     # Continue with other platforms even if one fails
 
         return True
+
+
+async def _setup_manual_devices(hass: HomeAssistant, entry: ConfigEntry, tuya_session: TuyaAPISession, homes: list, manual_devices: dict) -> None:
+    """Set up devices using manual IP configurations."""
+    for home in homes:
+        devices_for_home = await hass.async_add_executor_job(tuya_session.list_devices, home["groupId"])
+
+        for device in devices_for_home:
+            device_id = device["devId"]
+            
+            if device_id in manual_devices:
+                manual_config = manual_devices[device_id]
+                device_ip = manual_config["ip"]
+                local_key = device["localKey"]
+
+                logger.debug(
+                    "Setting up manual device %s at %s (device ID: %s)",
+                    manual_config.get("name", "Unknown"),
+                    device_ip,
+                    device_id,
+                )
+
+                hass_entity_id = f'{home["groupId"]}-{device["devId"]}'
+
+                coordinator = EufyTuyaDataUpdateCoordinator(
+                    hass,
+                    logger=logger,
+                    name=DOMAIN,
+                    update_interval=timedelta(seconds=30),
+                    host=device_ip,
+                    device_id=device_id,
+                    local_key=local_key,
+                )
+
+                # Try to get initial data, but don't fail if it doesn't work
+                try:
+                    await coordinator.async_config_entry_first_refresh()
+                    logger.info("Successfully connected to manual device %s at %s", device_id, device_ip)
+                except Exception as e:
+                    logger.warning(
+                        "Could not get initial data for manual device %s at %s: %s",
+                        device_id,
+                        device_ip,
+                        e,
+                    )
+                    # Still add the device, it might come online later
+
+                hass.data[DOMAIN][entry.entry_id][CONF_DISCOVERED_DEVICES][hass_entity_id] = {
+                    CONF_COORDINATOR: coordinator
+                }
+            else:
+                logger.debug("Device %s not configured for manual setup, skipping", device_id)
+
+
+async def _setup_discovered_devices(hass: HomeAssistant, entry: ConfigEntry, tuya_session: TuyaAPISession, homes: list) -> None:
+    """Set up devices using automatic discovery."""
+    detected_devices = await discover()
+    logger.debug("Detected devices on local network: %s", list(detected_devices.keys()))
+
+    for home in homes:
+        devices_for_home = await hass.async_add_executor_job(tuya_session.list_devices, home["groupId"])
+
+        for device in devices_for_home:
+            logger.debug("Got Tuya device in home group %s: %s", home["groupId"], device)
+
+            device_id = device["devId"]
+            local_key = device["localKey"]
+            
+            logger.debug("Looking for device_id '%s' in detected devices", device_id)
+
+            # Fix KeyError: use pop with default value None
+            discovered_device = detected_devices.pop(device_id, None)
+            if discovered_device:
+                device_ip = discovered_device["ip"]
+
+                logger.debug(
+                    "Found matching discovered device at %s for device ID %s",
+                    device_ip,
+                    device_id,
+                )
+
+                hass_entity_id = f'{home["groupId"]}-{device["devId"]}'
+
+                coordinator = EufyTuyaDataUpdateCoordinator(
+                    hass,
+                    logger=logger,
+                    name=DOMAIN,
+                    update_interval=timedelta(seconds=30),
+                    host=device_ip,
+                    device_id=device_id,
+                    local_key=local_key,
+                )
+
+                # Try to get initial data, but don't fail if it doesn't work
+                try:
+                    await coordinator.async_config_entry_first_refresh()
+                except Exception as e:
+                    logger.warning(
+                        "Could not get initial data for device %s at %s: %s",
+                        device_id,
+                        device_ip,
+                        e,
+                    )
+                    # Still add the device, it might come online later
+
+                hass.data[DOMAIN][entry.entry_id][CONF_DISCOVERED_DEVICES][hass_entity_id] = {
+                    CONF_COORDINATOR: coordinator
+                }
+            else:
+                logger.warning(
+                    "Could not find device %s on the local network. "
+                    "Available devices: %s. Device may be offline or on a different network.",
+                    device_id,
+                    list(detected_devices.keys()) if detected_devices else "none",
+                )
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

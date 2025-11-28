@@ -59,12 +59,24 @@ ports:
 3. Search for "Eufy RoboVac S1 Pro"
 4. Follow the on-screen instructions to complete the setup
 
+### Cross-VLAN Setup
+
+If your Home Assistant and Eufy RoboVac are on different VLANs (e.g., Home Assistant on management VLAN and vacuum on IoT VLAN), you can manually specify device IP addresses:
+
+1. During the configuration flow, the integration will discover your devices through the Eufy cloud
+2. When prompted, choose "Configure manual IP addresses (for cross-VLAN setups)"
+3. Enter the IP address for each device you want to control
+4. Leave the IP field blank for any devices you don't want to configure
+
+**Note**: For cross-VLAN setups, ensure your network allows communication between VLANs on the necessary ports (typically 6666-6667 UDP for Tuya local communication).
+
 ### Required Information
 
 You'll need the following information during setup:
 
 - **username**: User ID of eufylife.com (Confirmed from eufy Clean app)
 - **password**: Password for above User ID
+- **device IP addresses**: (Optional) For cross-VLAN configurations
 
 ## Supported Entities
 
@@ -87,15 +99,24 @@ You'll need the following information during setup:
 
 ### Device Not Found
 
-1. Verify the robot vacuum is on the same network
-2. Check if the IP address is correct
-3. Review firewall settings
+1. Verify the robot vacuum is on the same network segment or properly configured for cross-VLAN access
+2. Check if the IP address is correct (use ping to verify connectivity)
+3. For cross-VLAN setups, ensure your router/firewall allows UDP traffic on ports 6666-6667 between VLANs
+4. Review firewall settings on both Home Assistant and network infrastructure
+
+### Cross-VLAN Communication Issues
+
+1. Verify inter-VLAN routing is configured on your router/switch
+2. Check that UDP ports 6666-6667 are allowed between the Home Assistant VLAN and IoT VLAN
+3. Test connectivity using `ping` and `telnet` from Home Assistant to the vacuum IP
+4. Consider using manual device configuration if auto-discovery fails across VLANs
 
 ### Connection Errors
 
 1. Verify the username/password is correct
 2. Check if the device is online in the Eufy app
 3. Check Home Assistant logs for details
+4. For manual IP configurations, verify the IP address is reachable from Home Assistant
 
 ## Contributing
 
