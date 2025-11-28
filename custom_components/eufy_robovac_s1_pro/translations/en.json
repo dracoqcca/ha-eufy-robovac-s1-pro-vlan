@@ -1,0 +1,32 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Eufy Robovac S1 Pro Setup",
+        "description": "Enter your Eufy account credentials",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      },
+      "manual_config": {
+        "title": "Device Configuration",
+        "description": "Found the following devices:\n{devices}\n\nWould you like to manually configure IP addresses for cross-VLAN access?",
+        "data": {
+          "add_manual_devices": "Configure manual IP addresses (for cross-VLAN setups)"
+        }
+      },
+      "device_list": {
+        "title": "Manual IP Configuration",
+        "description": "Enter IP addresses for your devices (leave blank to skip a device):\n{devices}",
+        "data_description": {
+          "device_ip": "IP address for {device_name}"
+        }
+      }
+    },
+    "error": {
+      "username": "Username or password is incorrect",
+      "password": "Username or password is incorrect"
+    }
+  }
+}
