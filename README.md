@@ -1,10 +1,15 @@
-# Eufy RoboVac S1 Pro - Home Assistant Integration
+# Eufy RoboVac S1 Pro - Home Assistant Integration (Cross-VLAN Support)
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
 ## Overview
 
-This custom integration enables control of the Eufy RoboVac S1 Pro through Home Assistant.
+This custom integration enables control of the Eufy RoboVac S1 Pro through Home Assistant with **enhanced cross-VLAN support** for segmented networks.
+
+### ✨ New Features
+- **Cross-VLAN Support**: Configure devices manually when Home Assistant and vacuum are on different VLANs
+- **Manual IP Configuration**: Specify device IP addresses during setup for IoT network segmentation
+- **Multi-step Setup Flow**: Enhanced configuration process with options for both auto-discovery and manual configuration
 
 ## Features
 
@@ -26,6 +31,17 @@ This custom integration enables control of the Eufy RoboVac S1 Pro through Home 
 
 ### Via HACS (Recommended)
 
+**For Cross-VLAN Support Version:**
+1. Open HACS
+2. Click on "Integrations"
+3. Click the three dots menu in the top right and select "Custom repositories"
+4. Add repository URL `https://github.com/dracoqcca/ha-eufy-robovac-s1-pro-vlan`
+5. Select "Integration" as the category
+6. Click "Add"
+7. Search for "Eufy RoboVac S1 Pro" in HACS and install it
+8. Restart Home Assistant
+
+**For Original Version:**
 1. Open HACS
 2. Click on "Integrations"
 3. Click the three dots menu in the top right and select "Custom repositories"
@@ -37,7 +53,13 @@ This custom integration enables control of the Eufy RoboVac S1 Pro through Home 
 
 ### Manual Installation
 
-1. Download this repository
+**For Cross-VLAN Support Version:**
+1. Download this repository from `https://github.com/dracoqcca/ha-eufy-robovac-s1-pro-vlan`
+2. Copy the `custom_components/eufy_robovac_s1_pro` folder to your Home Assistant's `config/custom_components/` directory
+3. Restart Home Assistant
+
+**For Original Version:**
+1. Download the original repository from `https://github.com/tkoba1974/ha-eufy-robovac-s1-pro`
 2. Copy the `custom_components/eufy_robovac_s1_pro` folder to your Home Assistant's `config/custom_components/` directory
 3. Restart Home Assistant
 
@@ -120,6 +142,10 @@ You'll need the following information during setup:
 
 ## Contributing
 
+**For Cross-VLAN Support:**
+Please report bugs and feature requests via [Issues](https://github.com/dracoqcca/ha-eufy-robovac-s1-pro-vlan/issues).
+
+**For Original Integration:**
 Please report bugs and feature requests via [Issues](https://github.com/tkoba1974/ha-eufy-robovac-s1-pro/issues).
 
 Pull requests are welcome!
@@ -127,7 +153,10 @@ Pull requests are welcome!
 ## Credits
 
 This project is based on:
+- [Original Eufy S1 Pro Integration](https://github.com/tkoba1974/ha-eufy-robovac-s1-pro) by tkoba1974
 - [ha-eufy-robovac-g10-hybrid](https://github.com/Rjevski/ha-eufy-robovac-g10-hybrid)
+
+**Cross-VLAN Support Enhancement:** Added by dracoqcca
 
 ## License
 

@@ -1,13 +1,13 @@
 {
     "domain": "eufy_robovac_s1_pro",
-    "name": "Eufy RoboVac S1 Pro",
-    "documentation": "https://github.com/tkoba1974/ha-eufy-robovac-s1-pro",
-    "issue_tracker": "https://github.com/tkoba1974/ha-eufy-robovac-s1-pro/issues",
-    "codeowners": ["@tkoba1974"],
+    "name": "Eufy RoboVac S1 Pro (Cross-VLAN Support)",
+    "documentation": "https://github.com/dracoqcca/ha-eufy-robovac-s1-pro-vlan",
+    "issue_tracker": "https://github.com/dracoqcca/ha-eufy-robovac-s1-pro-vlan/issues",
+    "codeowners": ["@dracoqcca", "@tkoba1974"],
     "requirements": ["requests>=2.31.0", "cryptography>=41.0.0"],
     "iot_class": "local_polling",
     "config_flow": true,
-    "version": "1.0.2",
+    "version": "1.1.0",
     "dependencies": [],
     "integration_type": "device"
 }
